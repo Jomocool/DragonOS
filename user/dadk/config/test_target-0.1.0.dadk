@@ -1,0 +1,24 @@
+{
+  "name": "test_target",
+  "version": "0.1.0",
+  "description": "一个用来测试串口设备能够正常运行的app",
+  "rust_target": "x86_64-unknown-dragonos",
+  "task_type": {
+    "BuildFromSource": {
+      "Local": {
+        "path": "apps/test_target"
+      }
+    }
+  },
+  "depends": [],
+  "build": {
+    "build_command": "make"
+  },
+  "install": {
+    "in_dragonos_path": "/bin"
+  },
+  "clean": {
+    "clean_command": "make clean"
+  },
+  "envs": []
+}
