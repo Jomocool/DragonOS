@@ -90,7 +90,7 @@ pub trait Socket: Sync + Send + Debug {
     /// @param endpoint 要连接的端点
     ///
     /// @return 返回连接是否成功
-    fn connect(&mut self, endpoint: Endpoint) -> Result<(), SystemError>;
+    fn connect(&mut self, endpoint: Endpoint, _: Option<SocketHandle>) -> Result<(), SystemError>;
 
     /// @brief 对应于POSIX的bind函数，用于绑定到本机指定的端点
     ///
@@ -227,18 +227,21 @@ pub trait Socket: Sync + Send + Debug {
 
     fn clear_epoll(&mut self) -> Result<(), SystemError> {
         let mut handle_map_guard = HANDLE_MAP.write_irqsave();
-        let handle_item = handle_map_guard.get_mut(&self.socket_handle()).unwrap();
 
-        for epitem in handle_item.epitems.lock_irqsave().iter() {
-            let epoll = epitem.epoll();
-            if epoll.upgrade().is_some() {
-                let _ = EventPoll::ep_remove(
-                    &mut epoll.upgrade().unwrap().lock_irqsave(),
-                    epitem.fd(),
-                    None,
-                );
+        if let Some(handle_item) = handle_map_guard.get_mut(&self.socket_handle()) {
+            for epitem in handle_item.epitems.lock_irqsave().iter() {
+                let epoll = epitem.epoll();
+                if epoll.upgrade().is_some() {
+                    let _ = EventPoll::ep_remove(
+                        &mut epoll.upgrade().unwrap().lock_irqsave(),
+                        epitem.fd(),
+                        None,
+                    );
+                }
             }
         }
+
+        drop(handle_map_guard);
 
         Ok(())
     }

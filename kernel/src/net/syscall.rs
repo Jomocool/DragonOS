@@ -19,11 +19,14 @@ use crate::{
 
 use super::{
     socket::{
-        PosixSocketType, RawSocket, SocketHandleItem, SocketInode, SocketOptions, TcpSocket,
-        UdpSocket, HANDLE_MAP,
+        PosixSocketType, RawSocket, SeqpacketSocket, SocketHandleItem, SocketInode, SocketOptions,
+        TcpSocket, UdpSocket, HANDLE_MAP,
     },
     Endpoint, Protocol, ShutdownType, Socket,
 };
+
+/// Mask which covers at least up to SOCK_MASK-1. The remaining bits are used as flags.
+const SOCK_TYPE_MASK: u32 = 0xf;
 
 /// Flags for socket, socketpair, accept4
 const SOCK_CLOEXEC: FileMode = FileMode::O_CLOEXEC;
@@ -78,6 +81,63 @@ impl Syscall {
         drop(fd_table_guard);
         // kdebug!("do_socket: fd: {fd:?}");
         return fd;
+    }
+
+    pub fn socketpair(
+        address_family: usize,
+        socket_type: usize,
+        protocol: usize,
+        sv: &mut [u32],
+    ) -> Result<usize, SystemError> {
+        let address_family = AddressFamily::try_from(address_family as u16)?;
+        if address_family != AddressFamily::Unix {
+            return Err(SystemError::EINVAL);
+        }
+
+        let flags = socket_type.to_u32().unwrap() & !SOCK_TYPE_MASK;
+        if flags & (!(SOCK_CLOEXEC | SOCK_NONBLOCK)).bits() != 0 {
+            return Err(SystemError::EINVAL);
+        }
+
+        let mut socket1: Box<dyn Socket> = Box::new(SeqpacketSocket::new(
+            Protocol::from(protocol as u8),
+            SocketOptions::default(),
+        ));
+
+        let mut socket2: Box<dyn Socket> = Box::new(SeqpacketSocket::new(
+            Protocol::from(protocol as u8),
+            SocketOptions::default(),
+        ));
+
+        socket1.connect(Endpoint::Ip(None), Some(socket2.socket_handle()))?;
+        socket2.connect(Endpoint::Ip(None), Some(socket1.socket_handle()))?;
+
+        let alloc_fd = |socket: Box<dyn Socket>| -> Result<usize, SystemError> {
+            let handle_item = SocketHandleItem::new(&socket);
+
+            HANDLE_MAP
+                .write_irqsave()
+                .insert(socket.socket_handle(), handle_item);
+
+            let socketinode: Arc<SocketInode> = SocketInode::new(socket);
+            let f = File::new(socketinode, FileMode::O_RDWR | FileMode::O_CLOEXEC)?;
+
+            // 把socket添加到当前进程的文件描述符表中
+            let binding = ProcessManager::current_pcb().fd_table();
+            let mut fd_table_guard = binding.write();
+            let fd = fd_table_guard.alloc_fd(f, None).map(|x| x as usize);
+            drop(fd_table_guard);
+
+            return fd;
+        };
+
+        let fd1 = alloc_fd(socket1)?;
+        let fd2 = alloc_fd(socket2)?;
+
+        sv[0] = fd1.to_u32().unwrap();
+        sv[1] = fd2.to_u32().unwrap();
+
+        return Ok(0);
     }
 
     /// @brief sys_setsockopt系统调用的实际执行函数
@@ -187,7 +247,7 @@ impl Syscall {
             .ok_or(SystemError::EBADF)?;
         let mut socket = unsafe { socket.inner_no_preempt() };
         // kdebug!("connect to {:?}...", endpoint);
-        socket.connect(endpoint)?;
+        socket.connect(endpoint, None)?;
         return Ok(0);
     }
 

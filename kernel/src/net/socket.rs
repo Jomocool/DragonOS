@@ -167,6 +167,7 @@ impl PortManager {
                 SocketType::UdpSocket => self.udp_port_table.lock(),
                 SocketType::TcpSocket => self.tcp_port_table.lock(),
                 SocketType::RawSocket => panic!("RawSocket cann't get a port"),
+                SocketType::SeqpacketSocket => panic!("SeqpacketSocket cann't get a port"),
             };
             if let None = listen_table_guard.get(&port) {
                 drop(listen_table_guard);
@@ -191,6 +192,7 @@ impl PortManager {
                 SocketType::UdpSocket => self.udp_port_table.lock(),
                 SocketType::TcpSocket => self.tcp_port_table.lock(),
                 SocketType::RawSocket => panic!("RawSocket cann't bind a port"),
+                SocketType::SeqpacketSocket => panic!("SeqpacketSocket cann't bind a port"),
             };
             match listen_table_guard.get(&port) {
                 Some(_) => return Err(SystemError::EADDRINUSE),
@@ -207,6 +209,7 @@ impl PortManager {
             SocketType::UdpSocket => self.udp_port_table.lock(),
             SocketType::TcpSocket => self.tcp_port_table.lock(),
             SocketType::RawSocket => return Ok(()),
+            SocketType::SeqpacketSocket => return Ok(()),
         };
         listen_table_guard.remove(&port);
         drop(listen_table_guard);
@@ -254,6 +257,8 @@ pub enum SocketType {
     TcpSocket,
     /// 用于Udp通信的 Socket
     UdpSocket,
+    /// 用于进程间通信的Socket
+    SeqpacketSocket,
 }
 
 bitflags! {
@@ -481,7 +486,11 @@ impl Socket for RawSocket {
         }
     }
 
-    fn connect(&mut self, _endpoint: super::Endpoint) -> Result<(), SystemError> {
+    fn connect(
+        &mut self,
+        _endpoint: super::Endpoint,
+        _: Option<SocketHandle>,
+    ) -> Result<(), SystemError> {
         return Ok(());
     }
 
@@ -681,7 +690,11 @@ impl Socket for UdpSocket {
     }
 
     /// @brief
-    fn connect(&mut self, endpoint: super::Endpoint) -> Result<(), SystemError> {
+    fn connect(
+        &mut self,
+        endpoint: super::Endpoint,
+        _: Option<SocketHandle>,
+    ) -> Result<(), SystemError> {
         if let Endpoint::Ip(_) = endpoint {
             self.remote_endpoint = Some(endpoint);
             return Ok(());
@@ -936,7 +949,7 @@ impl Socket for TcpSocket {
         );
     }
 
-    fn connect(&mut self, endpoint: Endpoint) -> Result<(), SystemError> {
+    fn connect(&mut self, endpoint: Endpoint, _: Option<SocketHandle>) -> Result<(), SystemError> {
         let mut sockets = SOCKET_SET.lock_irqsave();
         let socket = sockets.get_mut::<tcp::Socket>(self.handle.0);
 
@@ -1154,6 +1167,103 @@ impl Socket for TcpSocket {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct SeqpacketSocket {
+    handle: Arc<GlobalSocketHandle>,
+    peer_seqhandle: Option<SocketHandle>,
+    metadata: SocketMetadata,
+}
+
+impl SeqpacketSocket {
+    /// 元数据的缓冲区的大小
+    pub const DEFAULT_METADATA_BUF_SIZE: usize = 1024;
+    /// 默认的发送缓冲区的大小 transmiss
+    pub const DEFAULT_RX_BUF_SIZE: usize = 64 * 1024;
+    /// 默认的接收缓冲区的大小 receive
+    pub const DEFAULT_TX_BUF_SIZE: usize = 64 * 1024;
+
+    pub fn new(protocol: Protocol, options: SocketOptions) -> Self {
+        let tx_buffer = raw::PacketBuffer::new(
+            vec![raw::PacketMetadata::EMPTY; Self::DEFAULT_METADATA_BUF_SIZE],
+            vec![0; Self::DEFAULT_TX_BUF_SIZE],
+        );
+        let rx_buffer = raw::PacketBuffer::new(
+            vec![raw::PacketMetadata::EMPTY; Self::DEFAULT_METADATA_BUF_SIZE],
+            vec![0; Self::DEFAULT_RX_BUF_SIZE],
+        );
+        let protocol: u8 = protocol.into();
+        let socket = raw::Socket::new(
+            smoltcp::wire::IpVersion::Ipv4,
+            wire::IpProtocol::from(protocol),
+            tx_buffer,
+            rx_buffer,
+        );
+
+        // 把socket添加到socket集合中，并得到socket的句柄
+        let handle: Arc<GlobalSocketHandle> =
+            GlobalSocketHandle::new(SOCKET_SET.lock_irqsave().add(socket));
+
+        let metadata = SocketMetadata::new(
+            SocketType::SeqpacketSocket,
+            Self::DEFAULT_RX_BUF_SIZE,
+            Self::DEFAULT_TX_BUF_SIZE,
+            Self::DEFAULT_METADATA_BUF_SIZE,
+            options,
+        );
+
+        return Self {
+            handle,
+            peer_seqhandle: None,
+            metadata,
+        };
+    }
+}
+
+impl Socket for SeqpacketSocket {
+    fn read(&mut self, buf: &mut [u8]) -> (Result<usize, SystemError>, Endpoint) {
+        poll_ifaces();
+
+        let mut socket_set_guard = SOCKET_SET.lock_irqsave();
+        let socket = socket_set_guard.get_mut::<raw::Socket>(self.handle.0);
+
+        let len = socket.rx_buffer.payload_ring.dequeue_slice(buf);
+
+        return (Ok(len), Endpoint::Ip(None));
+    }
+
+    fn write(&self, buf: &[u8], _to: Option<Endpoint>) -> Result<usize, SystemError> {
+        poll_ifaces();
+
+        let mut socket_set_guard = SOCKET_SET.lock_irqsave();
+        let peer_socket = socket_set_guard.get_mut::<raw::Socket>(self.peer_seqhandle.unwrap());
+
+        let len = peer_socket.rx_buffer.payload_ring.enqueue_slice(buf);
+
+        return Ok(len);
+    }
+
+    fn connect(
+        &mut self,
+        _endpoint: Endpoint,
+        peer_seqhandle: Option<SocketHandle>,
+    ) -> Result<(), SystemError> {
+        self.peer_seqhandle = peer_seqhandle;
+        return Ok(());
+    }
+
+    fn metadata(&self) -> Result<SocketMetadata, SystemError> {
+        Ok(self.metadata.clone())
+    }
+
+    fn box_clone(&self) -> Box<dyn Socket> {
+        return Box::new(self.clone());
+    }
+
+    fn socket_handle(&self) -> SocketHandle {
+        self.handle.0
+    }
+}
+
 /// @brief 地址族的枚举
 ///
 /// 参考：https://code.dragonos.org.cn/xref/linux-5.19.10/include/linux/socket.h#180
@@ -1324,10 +1434,8 @@ impl IndexNode for SocketInode {
 
         let _ = socket.clear_epoll();
 
-        HANDLE_MAP
-            .write_irqsave()
-            .remove(&socket.socket_handle())
-            .unwrap();
+        HANDLE_MAP.write_irqsave().remove(&socket.socket_handle());
+
         return Ok(());
     }
 
@@ -1392,7 +1500,7 @@ pub struct SocketPollMethod;
 impl SocketPollMethod {
     pub fn poll(socket: &socket::Socket, shutdown: ShutdownType) -> EPollEventType {
         match socket {
-            socket::Socket::Raw(_) => todo!(),
+            socket::Socket::Raw(raw) => Self::raw_poll(raw, shutdown),
             socket::Socket::Icmp(_) => todo!(),
             socket::Socket::Udp(udp) => Self::udp_poll(udp, shutdown),
             socket::Socket::Tcp(tcp) => Self::tcp_poll(tcp, shutdown),
@@ -1450,6 +1558,36 @@ impl SocketPollMethod {
     }
 
     pub fn udp_poll(socket: &socket::udp::Socket, shutdown: ShutdownType) -> EPollEventType {
+        let mut event = EPollEventType::empty();
+
+        if shutdown.contains(ShutdownType::RCV_SHUTDOWN) {
+            event.insert(
+                EPollEventType::EPOLLRDHUP | EPollEventType::EPOLLIN | EPollEventType::EPOLLRDNORM,
+            );
+        }
+        if shutdown.contains(ShutdownType::SHUTDOWN_MASK) {
+            event.insert(EPollEventType::EPOLLHUP);
+        }
+
+        if socket.can_recv() {
+            event.insert(EPollEventType::EPOLLIN | EPollEventType::EPOLLRDNORM);
+        }
+
+        if socket.can_send() {
+            event.insert(
+                EPollEventType::EPOLLOUT
+                    | EPollEventType::EPOLLWRNORM
+                    | EPollEventType::EPOLLWRBAND,
+            );
+        } else {
+            // TODO: 缓冲区空间不够，需要使用信号处理
+            todo!()
+        }
+
+        return event;
+    }
+
+    pub fn raw_poll(socket: &socket::raw::Socket, shutdown: ShutdownType) -> EPollEventType {
         let mut event = EPollEventType::empty();
 
         if shutdown.contains(ShutdownType::RCV_SHUTDOWN) {

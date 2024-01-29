@@ -817,7 +817,15 @@ impl Syscall {
             }
 
             SYS_SOCKETPAIR => {
-                unimplemented!()
+                //unimplemented!();
+                let buf_vaddr = args[3];
+                let from_user = frame.from_user();
+                let mut user_buffer_writer =
+                    UserBufferWriter::new(buf_vaddr as *mut u8, 8, from_user)?;
+
+                let sv = user_buffer_writer.buffer(0)?;
+                let res = Self::socketpair(args[0], args[1], args[2], sv);
+                res
             }
 
             #[cfg(target_arch = "x86_64")]
