@@ -1,0 +1,23 @@
+{
+  "name": "mremap",
+  "version": "0.1.0",
+  "description": "内存重映射",
+  "task_type": {
+    "BuildFromSource": {
+      "Local": {
+        "path": "apps/mremap"
+      }
+    }
+  },
+  "depends": [ ],
+  "build": {
+    "build_command": "make"
+  },
+  "install": {
+    "in_dragonos_path": "/bin"
+  },
+  "clean": {
+    "clean_command": "make clean"
+  },
+  "envs": []
+}
