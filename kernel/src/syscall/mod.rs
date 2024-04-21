@@ -875,14 +875,8 @@ impl Syscall {
             }
 
             SYS_GETGID => Self::getgid(),
-            SYS_SETUID => {
-                kwarn!("SYS_SETUID has not yet been implemented");
-                Ok(0)
-            }
-            SYS_SETGID => {
-                kwarn!("SYS_SETGID has not yet been implemented");
-                Ok(0)
-            }
+            SYS_SETUID => Self::setuid(args[0]),
+            SYS_SETGID => Self::setgid(args[0]),
             SYS_SETSID => {
                 kwarn!("SYS_SETSID has not yet been implemented");
                 Ok(0)

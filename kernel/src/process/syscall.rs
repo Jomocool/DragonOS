@@ -9,6 +9,7 @@ use system_error::SystemError;
 
 use super::{
     abi::WaitOption,
+    cred::{Gid, Uid},
     exit::kernel_wait4,
     fork::{CloneFlags, KernelCloneArgs},
     resource::{RLimit64, RLimitID, RUsage, RUsageWho},
@@ -289,22 +290,34 @@ impl Syscall {
     }
 
     pub fn getuid() -> Result<usize, SystemError> {
-        // todo: 增加credit功能之后，需要修改
-        return Ok(0);
+        let pcb = ProcessManager::current_pcb();
+        return Ok(pcb.cred.lock().uid().data());
     }
 
     pub fn getgid() -> Result<usize, SystemError> {
-        // todo: 增加credit功能之后，需要修改
-        return Ok(0);
+        let pcb = ProcessManager::current_pcb();
+        return Ok(pcb.cred.lock().gid().data());
     }
 
     pub fn geteuid() -> Result<usize, SystemError> {
-        // todo: 增加credit功能之后，需要修改
-        return Ok(0);
+        let pcb = ProcessManager::current_pcb();
+        return Ok(pcb.cred.lock().euid().data());
     }
 
     pub fn getegid() -> Result<usize, SystemError> {
-        // todo: 增加credit功能之后，需要修改
+        let pcb = ProcessManager::current_pcb();
+        return Ok(pcb.cred.lock().egid().data());
+    }
+
+    pub fn setuid(uid: usize) -> Result<usize, SystemError> {
+        let pcb = ProcessManager::current_pcb();
+        pcb.cred.lock().setuid(Uid::new(uid));
+        return Ok(0);
+    }
+
+    pub fn setgid(gid: usize) -> Result<usize, SystemError> {
+        let pcb = ProcessManager::current_pcb();
+        pcb.cred.lock().setgid(Gid::new(gid));
         return Ok(0);
     }
 

@@ -62,10 +62,11 @@ use crate::{
 };
 use timer::AlarmTimer;
 
-use self::kthread::WorkerPrivate;
+use self::{cred::Cred, kthread::WorkerPrivate};
 
 pub mod abi;
 pub mod c_adapter;
+pub mod cred;
 pub mod exec;
 pub mod exit;
 pub mod fork;
@@ -604,6 +605,9 @@ pub struct ProcessControlBlock {
     /// 当前进程的线程组id（这个值在同一个线程组内永远不变）
     tgid: Pid,
 
+    /// 当前进程cred
+    cred: SpinLock<Cred>,
+
     basic: RwLock<ProcessBasicInfo>,
     /// 当前进程的自旋锁持有计数
     preempt_count: AtomicUsize,
@@ -673,12 +677,18 @@ impl ProcessControlBlock {
 
     #[inline(never)]
     fn do_create_pcb(name: String, kstack: KernelStack, is_idle: bool) -> Arc<Self> {
-        let (pid, ppid, cwd) = if is_idle {
-            (Pid(0), Pid(0), "/".to_string())
+        let (pid, ppid, cwd, cred) = if is_idle {
+            (
+                Pid(0),
+                Pid(0),
+                "/".to_string(),
+                SpinLock::new(Cred::idle_cred()),
+            )
         } else {
             let ppid = ProcessManager::current_pcb().pid();
             let cwd = ProcessManager::current_pcb().basic().cwd();
-            (Self::generate_pid(), ppid, cwd)
+            let cred = ProcessManager::current_pcb().cred.lock().clone();
+            (Self::generate_pid(), ppid, cwd, SpinLock::new(cred))
         };
 
         let basic_info = ProcessBasicInfo::new(Pid(0), ppid, name, cwd, None);
@@ -695,6 +705,7 @@ impl ProcessControlBlock {
         let pcb = Self {
             pid,
             tgid: pid,
+            cred,
             basic: basic_info,
             preempt_count,
             flags,
