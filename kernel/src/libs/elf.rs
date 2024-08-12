@@ -262,6 +262,7 @@ impl ElfLoader {
                 .map_err(map_err_handler)?
                 .virt_address();
 
+
             let to_unmap = map_addr + map_size;
             let to_unmap_size = total_size - map_size;
 
@@ -363,7 +364,7 @@ impl ElfLoader {
         for section in phdr_table {
             kdebug!("loading {:?}", section);
             if section.p_type == PT_LOAD {
-                let mut elf_type = MapFlags::MAP_PRIVATE;
+                let mut elf_type = MapFlags::MAP_PRIVATE | MapFlags::MAP_FIXED;
                 let elf_prot = Self::make_prot(section.p_flags, true, true);
                 let vaddr = TryInto::<usize>::try_into(section.p_vaddr).unwrap();
                 if interp_hdr.e_type == ET_EXEC || load_addr_set {
@@ -831,7 +832,7 @@ impl BinaryLoader for ElfLoader {
             // 生成ProtFlags.
             let elf_prot_flags = Self::make_prot(seg_to_load.p_flags, interpreter.is_some(), false);
 
-            let mut elf_map_flags = MapFlags::MAP_PRIVATE;
+            let mut elf_map_flags = MapFlags::MAP_PRIVATE | MapFlags::MAP_FIXED;
 
             let vaddr = VirtAddr::new(seg_to_load.p_vaddr.try_into().unwrap());
 

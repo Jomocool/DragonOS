@@ -263,8 +263,6 @@ impl InnerAddressSpace {
             // 如果hint不是0，且hint小于DEFAULT_MMAP_MIN_ADDR，则对齐到DEFAULT_MMAP_MIN_ADDR
             if (addr != 0) && round_to_min && (addr < DEFAULT_MMAP_MIN_ADDR) {
                 Some(VirtAddr::new(page_align_up(DEFAULT_MMAP_MIN_ADDR)))
-            } else if addr == 0 {
-                None
             } else {
                 Some(VirtAddr::new(addr))
             }
@@ -700,13 +698,13 @@ impl InnerAddressSpace {
         size: usize,
         flags: MapFlags,
     ) -> Result<VirtRegion, SystemError> {
-        // 如果没有指定地址，那么就在当前进程的地址空间中寻找一个空闲的虚拟内存范围。
-        if vaddr == VirtAddr::new(0) {
-            return self
-                .mappings
-                .find_free(min_vaddr, size)
-                .ok_or(SystemError::ENOMEM);
-        }
+        // // 如果没有指定地址，那么就在当前进程的地址空间中寻找一个空闲的虚拟内存范围。
+        // if vaddr == VirtAddr::new(0) {
+        //     return self
+        //         .mappings
+        //         .find_free(min_vaddr, size)
+        //         .ok_or(SystemError::ENOMEM);
+        // }
 
         // 如果指定了地址，那么就检查指定的地址是否可用。
         let requested = VirtRegion::new(vaddr, size);
